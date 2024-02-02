@@ -1,14 +1,21 @@
 import subprocess
 import easysettings
 import serial.tools.list_ports
+import logging
+
+# Setup logging for settings changes
+logger = logging.getLogger('SettingsChangeLogger')
+logger.setLevel(logging.INFO)
+handler = logging.FileHandler('settings_log.log')
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 # Load settings from configuration file
 settings = easysettings.EasySettings("settings.conf")
 
-
 def format_com_port(port):
     return f'COM{port}' if not port.startswith('COM') else port
-
 
 def list_available_com_ports():
     com_ports = serial.tools.list_ports.comports()
@@ -16,43 +23,57 @@ def list_available_com_ports():
     print('Available COM ports:', available_ports)
     return available_ports
 
-
 def update_com_ports():
     list_available_com_ports()
+    old_barcode_reader = settings.get('barcode_reader')
+    old_door_controller = settings.get('door_controller')
     barcode_reader = format_com_port(input('Enter COM port for the barcode reader: '))
     door_controller = format_com_port(input('Enter COM port for the door controller: '))
+
+    if barcode_reader != old_barcode_reader:
+        logger.info(f"Barcode reader COM port changed from {old_barcode_reader} to {barcode_reader}")
+    if door_controller != old_door_controller:
+        logger.info(f"Door controller COM port changed from {old_door_controller} to {door_controller}")
+
     settings.set('barcode_reader', barcode_reader)
     settings.set('door_controller', door_controller)
     settings.save()
 
-
 def update_api_credentials():
-    s_login = input('Wellness Living API username (leave blank to keep current): ') or settings.get('s_login')
-    s_password = input('Wellness Living API password (leave blank to keep current): ') or settings.get('s_password')
-    AUTHORIZE_CODE = input('AUTHORIZE_CODE (leave blank to keep current): ') or settings.get('AUTHORIZE_CODE')
-    AUTHORIZE_ID = input('AUTHORIZE_ID (leave blank to keep current): ') or settings.get('AUTHORIZE_ID')
-    k_location = input('Location ID (leave blank to keep current): ') or settings.get('k_location')
+    # Store old values for comparison
+    old_values = {
+        's_login': settings.get('s_login'),
+        's_password': settings.get('s_password'),
+        'AUTHORIZE_CODE': settings.get('AUTHORIZE_CODE'),
+        'AUTHORIZE_ID': settings.get('AUTHORIZE_ID'),
+        'k_location': settings.get('k_location')
+    }
 
-    # Only update if the user has entered a value
-    settings.set('s_login', s_login)
-    settings.set('s_password', s_password)
-    settings.set('AUTHORIZE_CODE', AUTHORIZE_CODE)
-    settings.set('AUTHORIZE_ID', AUTHORIZE_ID)
-    settings.set('k_location', k_location)
+    # Update settings with potential new values
+    new_values = {
+        's_login': input('Wellness Living API username (leave blank to keep current): ') or old_values['s_login'],
+        's_password': input('Wellness Living API password (leave blank to keep current): ') or old_values['s_password'],
+        'AUTHORIZE_CODE': input('AUTHORIZE_CODE (leave blank to keep current): ') or old_values['AUTHORIZE_CODE'],
+        'AUTHORIZE_ID': input('AUTHORIZE_ID (leave blank to keep current): ') or old_values['AUTHORIZE_ID'],
+        'k_location': input('Location ID (leave blank to keep current): ') or old_values['k_location']
+    }
+
+    for key, value in new_values.items():
+        if old_values[key] != value:
+            logger.info(f"{key} changed from {old_values[key]} to {value}")
+            settings.set(key, value)
     settings.save()
 
-
 def set_unlock_duration():
-    current_duration = settings.get('unlock_duration', 'Not set')
-    print(f"Current unlock duration: {current_duration} seconds")
+    old_duration = settings.get('unlock_duration', 'Not set')
     new_duration = input('Enter new unlock duration in seconds (leave blank to keep current): ')
-    if new_duration:
+    if new_duration and new_duration != old_duration:
+        logger.info(f"Unlock duration changed from {old_duration} to {new_duration}")
         settings.set('unlock_duration', new_duration)
         settings.save()
         print(f"Unlock duration updated to {new_duration} seconds.")
     else:
         print("Unlock duration remains unchanged.")
-
 
 def test_api_connection():
     member_id = input("Enter a Member ID for testing: ")
@@ -63,7 +84,6 @@ def test_api_connection():
     print("Output:\n", stdout.decode())
     if stderr:
         print("Errors:\n", stderr.decode())
-
 
 def main_menu():
     while True:
@@ -83,8 +103,11 @@ def main_menu():
         elif choice == '4':
             set_unlock_duration()
         elif choice == '5':
+            print("Exiting setup...")
+            logger.info("Exited setup.py via menu option")
+            # Call dragonfly.py upon exiting
+            subprocess.run(['python', 'dragonfly.py'], check=True)
             break
-
 
 if __name__ == '__main__':
     main_menu()
