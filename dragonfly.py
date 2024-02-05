@@ -108,44 +108,45 @@ def check_access_from_database(member_id):
 
 
 def process_barcode(barcode):
-    settings.set('s_member', barcode)
-    settings.save()
+    settings.set('s_member', barcode)  # Adjust or remove this line as needed for proper member ID handling.
     logger.info(f"Received barcode: {barcode}")
 
     # Check local database first
     logger.info(f"Checking local Database for barcode {barcode}...")
-    access_status, timestamp = check_access_from_database(barcode)
-    if access_status:
-        logger.info(f"Barcode {barcode} - Access: {access_status} from database")
-        subprocess.run(['python', 'lock_control.py'], check=True)
-        return
-    else:
-        logger.info(f"Barcode {barcode} not found in local database calling API...")
+    db_access_status, _ = check_access_from_database(barcode)
 
-    # If not in database or data is outdated, call the API
-    result = subprocess.run(['python', 'wellness_living.py'], capture_output=True, text=True)
+    if db_access_status:
+        # Log the access decision based on the database
+        logger.info(f"Barcode {barcode} - Access: {db_access_status} from database")
+        if db_access_status == "Allowed":
+            subprocess.run(['python', 'lock_control.py'], check=True)
+
+    # Always call the API to ensure the database is updated with the latest access information
+    logger.info(f"Updating access information for barcode {barcode} from API...")
+    result = subprocess.run(['python', 'wellness_living.py', barcode], capture_output=True, text=True)
     api_output = result.stdout.strip() if result.stdout else "No API output received."
 
+    # Determine access based on API call
+    if "can_access': True" in api_output:
+        api_access_status = "Allowed"
+    else:
+        api_access_status = "Denied"
+
+    # Update the database with the latest access information from the API
+    update_local_database(barcode, api_access_status, datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"))
+
+    # If API grants access, unlock the door (only if it wasn't already decided by the database)
+    if api_access_status == "Allowed" and db_access_status != "Allowed":
+        subprocess.run(['python', 'lock_control.py'], check=True)
+
+    # Log the final decision
     if api_output == "No API output received.":
-        logger.info(f"API Output: Unreachable")
-        access_status = "Denied"
-        logger.info(f"Barcode: {barcode} - Access: Denied")
-        logger.info(f"Barcode: {barcode} sent to database manager queue for synchronization when API becomes reachable")
+        logger.info(f"API Output: Unreachable, relied on database for access decision.")
     else:
         logger.info(f"API Output: {api_output}")
-        if "can_access': True" in api_output:
-            access_status = "Allowed"
-        else:
-            access_status = "Denied"
-        logger.info(f"Barcode: {barcode} - Access: {access_status}")
-        logger.info(
-            f"Local Database updated with barcode entry: \"{barcode}\": {{\"access_status\": \"{access_status}\", \"timestamp\": \"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}\"")
+        logger.info(f"Barcode: {barcode} - Final Access Decision: {api_access_status}")
 
-    # Update the database with new data from API or mark it for queue if API was unreachable
-    update_local_database(barcode, access_status, datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"))
 
-    if access_status == "Allowed":
-        subprocess.run(['python', 'lock_control.py'], check=True)
 
 
 def listen_for_barcodes():

@@ -5,6 +5,7 @@ from hashlib import sha256
 from hashlib import sha3_512
 from urllib.parse import urlparse
 from easysettings import EasySettings
+import sys
 
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
@@ -16,7 +17,7 @@ retry = Retry(connect=3, backoff_factor=0.5)
 adapter = HTTPAdapter(max_retries=retry)
 session.mount('https://', adapter)
 
-O_SETTING = EasySettings("setting.conf")
+O_SETTING = EasySettings("settings.conf")
 config_settings = EasySettings("settings.conf")
 
 class Config:
@@ -209,13 +210,23 @@ if not a_result['status'] == 'ok' or a_result['uid'] is None:
   # Successful login
 #else:
 #  Already logged.
-o_model_user = RequestModel('Wl/Integration/DragonFly/Access.json')
-# request for [Staging] Columbia Fitness k_business=49780
-a_result_user = o_model_user.get(
-  a_get={
-    'k_location': config_settings.get('k_location'),
-    's_member': config_settings.get('s_member')
-  }
-)
+if __name__ == "__main__":
+    # Check if a member ID was provided as a command-line argument
+    if len(sys.argv) > 1:
+        member_id = sys.argv[1]  # Use the member ID from the command line
+    else:
+        member_id = config_settings.get('s_member')  # Fallback to the config setting if no argument is provided
 
-print(a_result_user)
+    # Initialize the RequestModel with the desired endpoint
+    o_model_user = RequestModel('Wl/Integration/DragonFly/Access.json')
+
+    # Use the provided or fallback member ID in the API call
+    a_result_user = o_model_user.get(
+        a_get={
+            'k_location': config_settings.get('k_location'),
+            's_member': member_id  # Use the dynamically determined member ID
+        }
+    )
+
+    # Output the result of the API call
+    print(a_result_user)
