@@ -7,6 +7,8 @@ import time
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import atexit
+import os
+import json
 
 # Setup logging with daily rotation and backup for 30 days
 log_file_path = "dragonfly.log"
@@ -31,6 +33,8 @@ logger.addHandler(file_handler)
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
+
+database_file_path = "access_database.json"
 
 # Function to be called upon exit
 def on_exit():
@@ -79,20 +83,70 @@ def check_com_ports_and_api():
         subprocess.run(['python', 'setup.py'], check=True)
         return False
 
+
+def read_local_database():
+    if os.path.exists(database_file_path):
+        with open(database_file_path, "r") as file:
+            return json.load(file)
+    else:
+        return {}
+
+
+def update_local_database(member_id, access_status, timestamp):
+    database = read_local_database()
+    database[member_id] = {"access_status": access_status, "timestamp": timestamp}
+    with open(database_file_path, "w") as file:
+        json.dump(database, file, indent=4)
+
+
+def check_access_from_database(member_id):
+    database = read_local_database()
+    member_data = database.get(member_id)
+    if member_data and (datetime.now() - datetime.strptime(member_data["timestamp"], "%Y-%m-%d %H:%M:%S.%f")).days < 30:
+        return member_data["access_status"], member_data["timestamp"]
+    return None, None
+
+
 def process_barcode(barcode):
     settings.set('s_member', barcode)
     settings.save()
     logger.info(f"Received barcode: {barcode}")
+
+    # Check local database first
+    logger.info(f"Checking local Database for barcode {barcode}...")
+    access_status, timestamp = check_access_from_database(barcode)
+    if access_status:
+        logger.info(f"Barcode {barcode} - Access: {access_status} from database")
+        subprocess.run(['python', 'lock_control.py'], check=True)
+        return
+    else:
+        logger.info(f"Barcode {barcode} not found in local database calling API...")
+
+    # If not in database or data is outdated, call the API
     result = subprocess.run(['python', 'wellness_living.py'], capture_output=True, text=True)
     api_output = result.stdout.strip() if result.stdout else "No API output received."
-    logger.info(f"API Output: {api_output}")
-    if "can_access': True" in api_output:
-        access_status = "Allowed"
-        logger.info(f"Barcode: {barcode} - Access: {access_status}")
-        subprocess.run(['python', 'lock_control.py'], check=True)
-    else:
+
+    if api_output == "No API output received.":
+        logger.info(f"API Output: Unreachable")
         access_status = "Denied"
+        logger.info(f"Barcode: {barcode} - Access: Denied")
+        logger.info(f"Barcode: {barcode} sent to database manager queue for synchronization when API becomes reachable")
+    else:
+        logger.info(f"API Output: {api_output}")
+        if "can_access': True" in api_output:
+            access_status = "Allowed"
+        else:
+            access_status = "Denied"
         logger.info(f"Barcode: {barcode} - Access: {access_status}")
+        logger.info(
+            f"Local Database updated with barcode entry: \"{barcode}\": {{\"access_status\": \"{access_status}\", \"timestamp\": \"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')}\"")
+
+    # Update the database with new data from API or mark it for queue if API was unreachable
+    update_local_database(barcode, access_status, datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"))
+
+    if access_status == "Allowed":
+        subprocess.run(['python', 'lock_control.py'], check=True)
+
 
 def listen_for_barcodes():
     if not check_com_ports_and_api():
